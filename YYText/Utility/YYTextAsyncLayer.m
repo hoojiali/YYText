@@ -14,7 +14,7 @@
 
 
 /// Global display queue, used for content rendering.
-static dispatch_queue_t YYTextAsyncLayerGetDisplayQueue() {
+static dispatch_queue_t YYTextAsyncLayerGetDisplayQueue(void) {
 #define MAX_QUEUE_COUNT 16
     static int queueCount;
     static dispatch_queue_t queues[MAX_QUEUE_COUNT];
@@ -40,7 +40,7 @@ static dispatch_queue_t YYTextAsyncLayerGetDisplayQueue() {
 #undef MAX_QUEUE_COUNT
 }
 
-static dispatch_queue_t YYTextAsyncLayerGetReleaseQueue() {
+static dispatch_queue_t YYTextAsyncLayerGetReleaseQueue(void) {
 #ifdef YYDispatchQueuePool_h
     return YYDispatchQueueGetForQOS(NSQualityOfServiceDefault);
 #else
@@ -130,7 +130,7 @@ static dispatch_queue_t YYTextAsyncLayerGetReleaseQueue() {
         if (task.willDisplay) task.willDisplay(self);
         _YYTextSentinel *sentinel = _sentinel;
         int32_t value = sentinel.value;
-        BOOL (^isCancelled)() = ^BOOL() {
+        BOOL (^isCancelled)(void) = ^BOOL() {
             return value != sentinel.value;
         };
         CGSize size = self.bounds.size;
@@ -200,6 +200,8 @@ static dispatch_queue_t YYTextAsyncLayerGetReleaseQueue() {
     } else {
         [_sentinel increase];
         if (task.willDisplay) task.willDisplay(self);
+#if 0
+        // `UIGraphicsBeginImageContextWithOptions` iOS 4.0–18.2 Deprecated
         UIGraphicsBeginImageContextWithOptions(self.bounds.size, self.opaque, self.contentsScale);
         CGContextRef context = UIGraphicsGetCurrentContext();
         if (self.opaque && context) {
@@ -222,6 +224,34 @@ static dispatch_queue_t YYTextAsyncLayerGetReleaseQueue() {
         task.display(context, self.bounds.size, ^{return NO;});
         UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();
+#else
+        // Replace usage of UIGraphicsBeginImageContextWithOptions with UIGraphicsImageRenderer
+        UIGraphicsImageRendererFormat *format = [[UIGraphicsImageRendererFormat alloc] init];
+        format.opaque = self.opaque;
+        format.scale = self.contentsScale;
+        UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:self.bounds.size format:format];
+        UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+            CGContextRef ctx = context.CGContext;
+            if (self.opaque) {
+                CGSize size = self.bounds.size;
+                size.width *= self.contentsScale;
+                size.height *= self.contentsScale;
+                CGContextSaveGState(ctx); {
+                    if (!self.backgroundColor || CGColorGetAlpha(self.backgroundColor) < 1) {
+                        CGContextSetFillColorWithColor(ctx, [UIColor whiteColor].CGColor);
+                        CGContextAddRect(ctx, CGRectMake(0, 0, size.width, size.height));
+                        CGContextFillPath(ctx);
+                    }
+                    if (self.backgroundColor) {
+                        CGContextSetFillColorWithColor(ctx, self.backgroundColor);
+                        CGContextAddRect(ctx, CGRectMake(0, 0, size.width, size.height));
+                        CGContextFillPath(ctx);
+                    }
+                } CGContextRestoreGState(ctx);
+            }
+            task.display(ctx, self.bounds.size, ^{ return NO; });
+        }];
+#endif
         self.contents = (__bridge id)(image.CGImage);
         if (task.didDisplay) task.didDisplay(self, YES);
     }
